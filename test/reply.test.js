@@ -45,3 +45,28 @@ test('on reads AGENT_STANDUP_REPLY', () => {
   process.env.AGENT_STANDUP_REPLY = 'on'; assert.equal(reply.on(), true);
   delete process.env.AGENT_STANDUP_REPLY;
 });
+
+const http = require('http');
+const get = (port, p, headers = {}, method = 'GET', body) => new Promise((res, rej) => { const r = http.request({ port, path: p, method, headers }, (x) => { let b = ''; x.on('data', (d) => (b += d)); x.on('end', () => res({ status: x.statusCode, body: b })); }); r.on('error', rej); if (body) r.write(body); r.end(); });
+test('/api/reply: off by default, token and cross-site guards, answers', async () => {
+  process.env.AGENT_STANDUP_PREFS = path.join(tmp, 'prefs.json'); process.env.AGENT_STANDUP_PROJECTS = path.join(tmp, 'projects');
+  const server = require('../server.js'), srv = server.start(0); await new Promise((r) => srv.once('listening', r)); const port = srv.address().port;
+  const post = (o, h = {}) => get(port, '/api/reply', { 'content-type': 'application/json', ...h }, 'POST', JSON.stringify(o));
+  try {
+    delete process.env.AGENT_STANDUP_REPLY;
+    assert.equal((await get(port, '/api/reply?id=' + ID)).status, 404);
+    assert.doesNotMatch((await get(port, '/api/prefs.js')).body, /REPLY_TOKEN/);
+    process.env.AGENT_STANDUP_REPLY = 'on';
+    const token = /REPLY_TOKEN = "([0-9a-f]{48})"/.exec((await get(port, '/api/prefs.js')).body)[1];
+    assert.deepEqual(JSON.parse((await get(port, '/api/reply?id=' + ID)).body), { ok: true, status: 'busy', name: 'agents-19' });
+    assert.equal((await post({ id: ID, text: 'hi' })).status, 403);
+    assert.equal((await post({ id: ID, text: 'hi', token: 'x'.repeat(48) })).status, 403);
+    assert.equal((await post({ id: ID, text: 'hi', token }, { 'sec-fetch-site': 'cross-site' })).status, 403);
+    assert.equal((await get(port, '/api/reply?id=' + ID, { 'sec-fetch-site': 'cross-site' })).status, 403);
+    assert.equal((await post({ id: ID, text: '', token })).status, 400);
+    assert.equal((await post({ id: '99999999-2222-3333-4444-555555555555', text: 'hi', token })).status, 409);
+    fs.rmSync(LOG, { force: true });
+    const ok = await post({ id: ID, text: 'hi', token }); assert.equal(ok.status, 200); assert.deepEqual(JSON.parse(ok.body), { ok: true });
+    assert.deepEqual(calls().filter((a) => a[0] === 'send-keys').map((a) => a.at(-1)), ['hi', 'Enter']);
+  } finally { delete process.env.AGENT_STANDUP_REPLY; srv.close(); server.shutdown(); }
+});
