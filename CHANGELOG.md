@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.35.0
+- **Artifacts made from a claude.ai template are shown in the call.** When Claude builds a design or a document from one of claude.ai's Artifact types (a Claude Design booklet, for instance), the window used to say “No preview here” for the whole session. It now shows each page as Claude publishes it, a few seconds each, under the name the canvas gives it (“03 · Day 1 – Session”). claude.ai lets no other page show its own, so each page is put together from the session file, as for any artifact; its scripts do not run and nothing is fetched unless you load its libraries.
+- **The whole document, once it is made.** When the lead says it is done, the window shows every page of the document at once. Click it in the line of files and it opens laid out as on the claude.ai canvas, rows and titles included, at the width of the window, to scroll through.
+
 ## 1.34.0
 - **Docs and pages opened for you are in the line of files.** A document Claude writes with the Claude Docs connector, and an artifact Claude opens on your screen, now show under the call with the files made for you: their title and their link (claude.ai lets no other page show them, so there is no preview). Each one appears once, whatever its address; the call says “Showing …” when an agent opens one.
 - **Easier to find in VS Code.** The extension declares the 30 keywords the Marketplace allows (ai agents, multi-agent, agent monitor, dashboard, anthropic…), so a search in the Extensions view finds it.
