@@ -1412,7 +1412,7 @@ const TOOL = { _codex: 'Codex', _vibe: 'Vibe', _cowork: 'Cowork' }, leadTool = (
 // ---------- the human's line: typed into the session's terminal through tmux (server: reply.js, off unless AGENT_STANDUP_REPLY=on) ----------
 const SAY = { name: '', why: '', draft: '' };   // draft: the id of the session the text in the field was started for
 let sayReq = 0;   // the latest sayCheck request: an older answer arriving late is ignored
-const sayWhy = (w) => ({ none: L('Session fermée : rien ne peut recevoir le message', 'Session closed: nothing can receive the message'), notmux: L('Session lancée hors tmux : lance-la dans tmux pour lui parler', 'Session started outside tmux: start it in tmux to talk to it'), tmux: L('tmux injoignable', 'tmux unreachable'), text: L('Message vide ou trop long (4000 caractères au plus)', 'Empty or too long message (4000 characters at most)'), token: L('Page périmée : recharge-la', 'Stale page: reload it') }[w] || L('Envoi impossible', 'Could not send'));
+const sayWhy = (w) => ({ none: L('Session fermée : rien ne peut recevoir le message', 'Session closed: nothing can receive the message'), notmux: L('Session lancée hors tmux : lance-la dans tmux pour lui parler', 'Session started outside tmux: start it in tmux to talk to it'), tmux: L('tmux injoignable', 'tmux unreachable'), text: L('Message vide ou trop long (4000 caractères au plus)', 'Empty or too long message (4000 characters at most)'), token: L('Page périmée : recharge-la', 'Stale page: reload it'), waiting: L('Claude attend ta réponse dans le terminal (demande de permission) : réponds-y là-bas', 'Claude is waiting for your answer in the terminal (permission prompt): answer it there') }[w] || L('Envoi impossible', 'Could not send'));
 let sayTick = 0;
 const sayStatus = (msg, err) => { const s = $('#sayS'), n = ++sayTick; s.textContent = ''; s.classList.toggle('err', !!err); if (msg) requestAnimationFrame(() => { if (n === sayTick) s.textContent = msg; }); };   // clear then set on the next frame: a repeated identical message is announced again
 const sayGrow = () => { const f = $('#sayT'); f.style.height = 'auto'; f.style.height = Math.min(f.scrollHeight + 2, 96) + 'px'; };
@@ -1422,9 +1422,10 @@ async function sayCheck() {   // can the followed session hear us: asked when th
   let r = { ok: false, why: 'tmux' }; try { r = await (await fetch('/api/reply?id=' + encodeURIComponent(id))).json(); } catch {}
   if (n !== sayReq || !S.cur || S.cur.id !== id) return;
   SAY.name = r.name || L('la session', 'the session'); $('#sayL').textContent = L('À ', 'To ') + SAY.name; $('#sayB').textContent = L('Envoyer', 'Send');
-  $('#sayT').disabled = !r.ok; if (!$('#sayB').classList.contains('busy')) $('#sayB').disabled = !r.ok;
+  const wait = r.ok && r.status === 'waiting', can = r.ok && !wait; $('#sayT').disabled = !can; if (!$('#sayB').classList.contains('busy')) $('#sayB').disabled = !can;   // waiting = a permission menu: a typed line would answer it
   $('#sayChip').textContent = r.ok && r.status === 'busy' ? L('travaille, ton message passera après', 'working, your message goes after') : '';
-  if (!r.ok) { if (SAY.why !== r.why) sayStatus(sayWhy(r.why), false); } else if (SAY.why) sayStatus('', false); SAY.why = r.ok ? '' : r.why;
+  const why = !r.ok ? r.why : wait ? 'waiting' : '';
+  if (why) { if (SAY.why !== why) sayStatus(sayWhy(why), false); } else if (SAY.why) sayStatus('', false); SAY.why = why;
 }
 setInterval(sayCheck, 5000);
 $('#say').onsubmit = async (ev) => {
