@@ -13,7 +13,8 @@ const ID = '11111111-2222-3333-4444-555555555555';
 const calls = () => { try { return fs.readFileSync(LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 // A stand-in for claude: a child of this test process, so its parent chain reaches the fake pane pid
 const claude = spawn('sleep', ['60']); test.after(() => claude.kill());
-fs.writeFileSync(path.join(SESS, claude.pid + '.json'), JSON.stringify({ pid: claude.pid, sessionId: ID, status: 'busy', name: 'agents-19' }));
+const procStart = (pid) => { const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return st.slice(st.lastIndexOf(')') + 2).split(' ')[19]; };   // field 22
+fs.writeFileSync(path.join(SESS, claude.pid + '.json'), JSON.stringify({ pid: claude.pid, procStart: procStart(claude.pid), sessionId: ID, status: 'busy', name: 'agents-19' }));
 
 test('clean flattens control characters and trims', () => {
   assert.equal(reply.clean('  a\nb\r\tc\u001b[2J  '), 'a b c [2J');
@@ -24,6 +25,9 @@ test('lookup finds the pane through the parent chain', async () => {
   assert.deepEqual(await reply.lookup(ID), { ok: true, pane: '%7', status: 'busy', name: 'agents-19' });
   assert.deepEqual(await reply.lookup('not-an-id'), { ok: false, why: 'none' });
   assert.deepEqual(await reply.lookup('99999999-2222-3333-4444-555555555555'), { ok: false, why: 'none' });
+  const OLD = '22222222-2222-3333-4444-555555555555';   // a pid reused by another process: procStart differs
+  fs.writeFileSync(path.join(SESS, process.pid + '.json'), JSON.stringify({ pid: process.pid, procStart: '1', sessionId: OLD }));
+  try { assert.deepEqual(await reply.lookup(OLD), { ok: false, why: 'none' }); } finally { fs.rmSync(path.join(SESS, process.pid + '.json')); }
   process.env.FAKE_PANE_PID = '999999999';
   try { assert.equal((await reply.lookup(ID)).why, 'notmux'); } finally { process.env.FAKE_PANE_PID = String(process.pid); }
   process.env.FAKE_TMUX_FAIL = '1';
@@ -35,6 +39,8 @@ test('send types the text literally, then Enter on its own', async () => {
   assert.deepEqual(await reply.send(ID, '-rf\nhello'), { ok: true });
   const c = calls().filter((a) => a[0] === 'send-keys');
   assert.deepEqual(c, [['send-keys', '-t', '%7', '-l', '--', '-rf hello'], ['send-keys', '-t', '%7', 'Enter']]);
+  fs.rmSync(LOG, { force: true }); await reply.send(ID, 'fix this;');   // tmux drops a final ; of an argument
+  assert.deepEqual(calls().filter((a) => a[0] === 'send-keys')[0], ['send-keys', '-t', '%7', '-l', '--', 'fix this; ']);
   assert.deepEqual(await reply.send(ID, '   '), { error: 'text' });
   assert.deepEqual(await reply.send(ID, 'x'.repeat(4001)), { error: 'text' });
   assert.deepEqual(await reply.send(ID, { a: 1 }), { error: 'text' });
