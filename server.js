@@ -15,7 +15,7 @@ const zlib = require('zlib');
 const { execFileSync, execFile } = require('child_process');
 
 const PORT = process.env.PORT || 4747;
-const REPLY_TOKEN = crypto.randomBytes(24).toString('hex'), replyTokenOk = (t) => typeof t === 'string' && t.length === REPLY_TOKEN.length && crypto.timingSafeEqual(Buffer.from(t), Buffer.from(REPLY_TOKEN));   // made at each start, given only to the page through /api/prefs.js
+const REPLY_TOKEN = crypto.randomBytes(24).toString('hex'), replyTokenOk = (t) => { if (typeof t !== 'string') return false; const a = Buffer.from(t), b = Buffer.from(REPLY_TOKEN); return a.length === b.length && crypto.timingSafeEqual(a, b); };   // made at each start, given only to the page through /api/prefs.js
 // Same place Claude Code writes to: honours CLAUDE_CONFIG_DIR (custom config dirs are common on Linux); AGENT_STANDUP_PROJECTS overrides it.
 const ROOT = process.env.AGENT_STANDUP_PROJECTS || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
 const PUBLIC = path.join(__dirname, 'public');

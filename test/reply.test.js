@@ -65,6 +65,8 @@ test('/api/reply: off by default, token and cross-site guards, answers', async (
     assert.equal((await get(port, '/api/reply?id=' + ID, { 'sec-fetch-site': 'cross-site' })).status, 403);
     assert.equal((await post({ id: ID, text: '', token })).status, 400);
     assert.equal((await post({ id: '99999999-2222-3333-4444-555555555555', text: 'hi', token })).status, 409);
+    assert.equal((await post({ id: ID, text: 'hi', token: 'é'.repeat(48) })).status, 403);   // 48 characters, 96 bytes: must not crash the server
+    assert.equal((await get(port, '/api/reply?id=' + ID)).status, 200);
     fs.rmSync(LOG, { force: true });
     const ok = await post({ id: ID, text: 'hi', token }); assert.equal(ok.status, 200); assert.deepEqual(JSON.parse(ok.body), { ok: true });
     assert.deepEqual(calls().filter((a) => a[0] === 'send-keys').map((a) => a.at(-1)), ['hi', 'Enter']);
