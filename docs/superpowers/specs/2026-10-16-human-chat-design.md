@@ -44,6 +44,9 @@ The lookup runs on each `GET /api/reply` (cheap: one small directory, one tmux c
   (tmux missing or its socket unreachable). `status` and `name` come from the session file.
 - `POST /api/reply` with `{ id, text, token }`: resolves the pane again, then the two `send-keys`.
   Returns `{ ok: true }` or `{ error: why }`.
+- Waiting rule: when the session file says `status: "waiting"` (a permission menu is open, `waitingFor: "permission prompt"`),
+  `POST` sends nothing and answers 409 `{ error: "waiting" }`. The menu highlights "1. Yes": typed text then Enter could approve
+  an action. A chat line never answers a menu. `GET` still returns `ok: true` with `status: "waiting"`.
 - `text`: string, trimmed, 1 to 4000 characters, newlines and control characters replaced by spaces
   (a newline would send several messages). Anything else: 400.
 - `execFile` only, never a shell. tmux binary from `AGENT_STANDUP_TMUX` (default `tmux`), sessions
@@ -68,6 +71,7 @@ Touch target 44 px minimum. Existing tokens only (`--panel2`, `--line`, `--accen
 |---|---|
 | Ready | border `--line`, `--accent` on focus |
 | Agent busy | field enabled, gold chip "working, your message goes after" (Claude Code queues typed input) |
+| Waiting on a permission menu | field and button disabled like the next row, reason under it: "Claude is waiting for your answer in the terminal (permission prompt): answer it there"; no chip. A POST answered `waiting` shows the same text |
 | Outside tmux / not running | field disabled, opacity .5, `cursor:not-allowed`, reason written under it |
 | Sending | button disabled with a spinner, no double send |
 | Error | message under the field in `--red`, typed text kept |
