@@ -29,6 +29,7 @@ async function send(id, text) {
   let t = clean(text); if (!t || t.length > 4000) return { error: 'text' };
   if (t.endsWith(';')) t += ' ';   // tmux reads a final ; of an argument as the end of the command
   const r = await lookup(id); if (!r.ok) return { error: r.why };
+  if (r.status === 'waiting') return { error: 'waiting' };   // a permission menu is open: typed text and Enter would answer it
   if ((await tmux(['send-keys', '-t', r.pane, '-l', '--', t])) == null) return { error: 'tmux' };   // -l: literal text, never read as key names
   if ((await tmux(['send-keys', '-t', r.pane, 'Enter'])) == null) return { error: 'tmux' };
   return { ok: true };

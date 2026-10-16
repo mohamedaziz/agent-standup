@@ -16,6 +16,12 @@ const claude = spawn('sleep', ['60']); test.after(() => claude.kill());
 const procStart = (pid) => { const st = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return st.slice(st.lastIndexOf(')') + 2).split(' ')[19]; };   // field 22
 fs.writeFileSync(path.join(SESS, claude.pid + '.json'), JSON.stringify({ pid: claude.pid, procStart: procStart(claude.pid), sessionId: ID, status: 'busy', name: 'agents-19' }));
 
+test('send refuses while the session waits on a permission menu', async () => {
+  const f = path.join(SESS, claude.pid + '.json'), orig = fs.readFileSync(f, 'utf8');
+  fs.writeFileSync(f, JSON.stringify({ ...JSON.parse(orig), status: 'waiting' })); fs.rmSync(LOG, { force: true });
+  try { assert.deepEqual(await reply.send(ID, 'hi'), { error: 'waiting' }); assert.equal(calls().filter((a) => a[0] === 'send-keys').length, 0); } finally { fs.writeFileSync(f, orig); }
+});
+
 test('clean flattens control characters and trims', () => {
   assert.equal(reply.clean('  a\nb\r\tc\u001b[2J  '), 'a b c [2J');
   assert.equal(reply.clean(42), '');
@@ -73,6 +79,8 @@ test('/api/reply: off by default, token and cross-site guards, answers', async (
     assert.equal((await post({ id: '99999999-2222-3333-4444-555555555555', text: 'hi', token })).status, 409);
     assert.equal((await post({ id: ID, text: 'hi', token: 'é'.repeat(48) })).status, 403);   // 48 characters, 96 bytes: must not crash the server
     assert.equal((await get(port, '/api/reply?id=' + ID)).status, 200);
+    const sf = path.join(SESS, claude.pid + '.json'), orig = fs.readFileSync(sf, 'utf8'); fs.writeFileSync(sf, JSON.stringify({ ...JSON.parse(orig), status: 'waiting' }));
+    try { const w = await post({ id: ID, text: 'hi', token }); assert.equal(w.status, 409); assert.deepEqual(JSON.parse(w.body), { error: 'waiting' }); } finally { fs.writeFileSync(sf, orig); }
     fs.rmSync(LOG, { force: true });
     const ok = await post({ id: ID, text: 'hi', token }); assert.equal(ok.status, 200); assert.deepEqual(JSON.parse(ok.body), { ok: true });
     assert.deepEqual(calls().filter((a) => a[0] === 'send-keys').map((a) => a.at(-1)), ['hi', 'Enter']);
