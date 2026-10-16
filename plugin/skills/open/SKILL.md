@@ -18,7 +18,7 @@ To open it:
 2. Start it in the background, so it keeps running while the user works. It needs Node.js 18 or later.
 
    ```bash
-   npx -y @double_geste/agent-standup@1.34.0 --open
+   npx -y @double_geste/agent-standup@1.35.0 --open
    ```
 
    `--open` opens the page in the user's browser. If the command says the port is already in use, another program has port 4747: run it again with `--port 4790` and use that port in the address below.

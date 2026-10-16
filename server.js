@@ -110,7 +110,7 @@ const toolLabel = (b, ts) => {
     case 'AskUserQuestion': out.d = { kind: 'text', what: 'question', text: clip((q0 ? q0.question + '\n' + (q0.options || []).map((o) => '• ' + (o.label || '')).join('\n') : ''), 500) }; break;
     case 'Skill': out.d = { kind: 'text', what: 'skill', v: i.skill, text: clip(i.skill + (i.args ? ' ' + i.args : ''), 200) }; break;
     case 'ToolSearch': out.d = { kind: 'text', what: 'toolsearch', text: clip(i.query, 200) }; break;
-    case 'Artifact': if ((!i.action || i.action === 'publish') && !i.asset) { out.d = { kind: 'artifact', file: typeof i.file_path === 'string' ? i.file_path : '', title: clip(i.title, 120), note: clip(i.description, 240) }; break; }   // a page published on claude.ai: the call shows it in a browser window (see artifactPage). Any other use of the tool (a read, a list, an upload) is a call like any other
+    case 'Artifact': if ((!i.action || i.action === 'publish') && !i.asset) { out.d = { kind: 'artifact', file: typeof i.file_path === 'string' ? i.file_path : '', title: clip(i.title, 120), note: clip(i.description, 240) }; const sent = i.files ? artSentOf(i) : [], pg = !/\.html?$/i.test(out.d.file) && sent.find((f) => /\.html?$/i.test(f)); if (sent.length > 1) out.d.sent = sent; if (pg) out.d.page = pg; break; }   // a page published on claude.ai: the call shows it in a browser window (see artifactPage). Any other use of the tool (a read, a list, an upload) is a call like any other
     if (i.action === 'open') { out.d = { kind: 'artifact', file: '', title: '', note: '', open: 1 }; break; }   // a page put on the person's screen: in the line of files when this session did not make it (see artOf)
     // falls through
     default: if (mcp && /(^|_)Claude_Docs$/.test(mcp[1] || '') && mcp[2] === 'batch' && i.container && i.container.create && typeof i.container.create.name === 'string') { out.d = { kind: 'artifact', file: '', title: clip(i.container.create.name, 120), note: '', doc: 1 }; break; }   // a doc of the Claude Docs connector being born (its later edits are calls like any other)
@@ -119,6 +119,12 @@ const toolLabel = (b, ts) => {
   return out;
 };
 // What a publish answered: the link of the page on claude.ai, its title and which version this is. typed: made from an Artifact type (a deck, a design, a document), whose page is the type's and not the file that was sent.
+// What a publish sent along with its files (the artboards of a design, its canvas.json), as absolute paths, the way the Write calls that made them name them. page: the page of a publish whose main file is not one.
+function artSentOf(i) {
+  const out = [], root = typeof i.root === 'string' && path.isAbsolute(i.root) ? i.root : '', add = (f) => { const p = typeof f !== 'string' || !f ? '' : path.isAbsolute(f) ? f : root ? path.join(root, f) : ''; if (p && !out.includes(p) && out.length < 60) out.push(p); };
+  add(i.file_path); for (const v of Array.isArray(i.files) ? i.files : i.files && typeof i.files === 'object' ? Object.values(i.files) : []) add(typeof v === 'string' ? v : v && (v.from || v.path));
+  return out;
+}
 const ART_URL = /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]{6,80}$/;
 const artifactOf = (u) => (u && typeof u === 'object' && typeof u.url === 'string' && ART_URL.test(u.url) ? { url: u.url, title: clip(u.title, 120), ...(u.seq > 0 ? { v: +u.seq } : {}), ...(u.type || u.created_from_type ? { typed: 1 } : {}) } : null);
 // What a call that put an artifact in front of the person answered, for the line of files: a publish (above); a doc the Claude Docs connector created, whose answer names the doc and its address;
@@ -179,52 +185,102 @@ function toolImage(file, toolId, n) {   // looks for the tool's result line in t
 }
 // ---- Artifacts: a page a session published on claude.ai is shown in the call, in a browser window on the shared screen. claude.ai lets no other page frame it, and the file that was published
 // is most often in a temporary folder that is emptied later: the page is put together again from the session file, which keeps in full the Write call that created it and the Edit calls that followed,
-// up to the publish that is asked for (so an old session shows each version as it was). Nothing outside the session files is read, as for the pictures. A page made another way (by a command,
+// up to the publish that is asked for (so an old session shows each version as it was). Nothing outside the session files is read, as for the pictures. An artifact made from a type (a design) shows the page
+// that publish sent, an artboard, without the type's own page around it, which only claude.ai has: its scripts do not run, the rest of it reads as it is. A page made another way (by a command,
 // or written by another agent) has no preview: the call shows its title and its link. The page is served to a frame that can reach neither this server nor, unless the person asked, the network (see /api/artifact).
 const artMemo = new Map(), ART_MAX = 8 * 1024 * 1024;
 const editOnce = (text, e) => { const a = e && typeof e.old_string === 'string' ? e.old_string : '', b = e && typeof e.new_string === 'string' ? e.new_string : ''; if (!a) return text; if (e.replace_all) return text.split(a).join(b); const i = text.indexOf(a); return i < 0 ? text : text.slice(0, i) + b + text.slice(i + a.length); };
-function artifactPage(file, toolId, fp) {   // the text of the page at fp as it was when the call toolId published it, or null
-  const key = file + '|' + toolId, memo = artMemo.get(key); if (memo && memo.html != null) return memo;
-  const pathMark = Buffer.from(JSON.stringify(fp).slice(1, -1)), errMark = Buffer.from('"is_error":true'), idMark = Buffer.from('"' + toolId + '"'), until = Date.now() + 2000;
-  const ops = [], failed = new Set(); let fd, carry = Buffer.alloc(0), pos = 0, size = 0, seen = false;
+function artifactFiles(file, wants) {   // wants: [{ fp, until }] → for each, the text of the file at fp as it was when the publish until sent it, or null. One pass over the session file for them all
+  const key = file + '|' + wants.map((w) => w.fp + '@' + w.until).join('|'), memo = artMemo.get(key); if (memo && memo.found) return memo.found;
+  const W = wants.map((w) => ({ fp: w.fp, until: w.until, path: Buffer.from(JSON.stringify(w.fp).slice(1, -1)), id: Buffer.from('"' + w.until + '"'), ops: [], seen: false }));
+  const errMark = Buffer.from('"is_error":true'), until = Date.now() + 2000, failed = new Set(); let fd, carry = Buffer.alloc(0), pos = 0, size = 0;
   try {
-    fd = fs.openSync(file, 'r'); size = fs.fstatSync(fd).size; if (memo && memo.miss === size) return null;   // already looked for in vain, and nothing was written since
+    fd = fs.openSync(file, 'r'); size = fs.fstatSync(fd).size; if (memo && memo.miss === size) return W.map(() => null);   // already looked for in vain, and nothing was written since
     while (pos < size && Date.now() < until) {
       const buf = Buffer.alloc(Math.min(8 * 1024 * 1024, size - pos)); fs.readSync(fd, buf, 0, buf.length, pos); pos += buf.length;
       const all = carry.length ? Buffer.concat([carry, buf]) : buf; let a = 0;
       for (let b; (b = all.indexOf(10, a)) >= 0; a = b + 1) {
-        const line = all.subarray(a, b), mine = !seen && (line.indexOf(pathMark) >= 0 || line.indexOf(idMark) >= 0); if (!mine && line.indexOf(errMark) < 0) continue;
+        const line = all.subarray(a, b), mine = W.some((w) => !w.seen && (line.indexOf(w.path) >= 0 || line.indexOf(w.id) >= 0)); if (!mine && line.indexOf(errMark) < 0) continue;
         let r; try { r = JSON.parse(line.toString('utf8')); } catch { continue; }
         for (const blk of blocks(r)) {
           if (blk.type === 'tool_result' && blk.is_error) failed.add(blk.tool_use_id);   // a write or an edit that was refused changed nothing (its answer may come after the publish, when both were asked at once)
-          if (blk.type !== 'tool_use' || seen) continue; const i = blk.input || {};
-          if (blk.id === toolId) seen = true;   // what was written after that publish belongs to the next one
-          else if (i.file_path === fp && (blk.name === 'Write' || blk.name === 'Edit' || blk.name === 'MultiEdit')) ops.push({ id: blk.id, name: blk.name, i });
+          if (blk.type !== 'tool_use') continue; const i = blk.input || {}, op = blk.name === 'Write' || blk.name === 'Edit' || blk.name === 'MultiEdit';
+          for (const w of W) { if (w.seen) continue; if (blk.id === w.until) w.seen = true; else if (op && i.file_path === w.fp) w.ops.push({ id: blk.id, name: blk.name, i }); }   // what was written after that publish belongs to the next one
         }
       }
       carry = Buffer.from(all.subarray(a));
     }
   } catch {} finally { if (fd != null) fs.closeSync(fd); }
-  let html = null;
-  if (seen && pos >= size) for (const op of ops) {
-    if (failed.has(op.id)) continue;
-    if (op.name === 'Write') html = typeof op.i.content === 'string' ? op.i.content : null;
-    else if (html != null) for (const e of op.name === 'MultiEdit' ? (Array.isArray(op.i.edits) ? op.i.edits : []) : [op.i]) html = editOnce(html, e);
-  }
-  if (html != null && html.length > ART_MAX) html = null;
-  const found = html != null ? { html, net: /<script\b[^>]*\bsrc\s*=\s*["']?https?:/i.test(html) } : null;   // net: it names a library kept on another server, which the frame does not load unless asked
-  artMemo.delete(key); artMemo.set(key, found || { miss: size }); if (artMemo.size > 8) artMemo.delete(artMemo.keys().next().value);
+  const found = W.map((w) => {
+    let html = null; if (!w.seen || pos < size) return null;
+    for (const op of w.ops) {
+      if (failed.has(op.id)) continue;
+      if (op.name === 'Write') html = typeof op.i.content === 'string' ? op.i.content : null;
+      else if (html != null) for (const e of op.name === 'MultiEdit' ? (Array.isArray(op.i.edits) ? op.i.edits : []) : [op.i]) html = editOnce(html, e);
+    }
+    return html != null && html.length <= ART_MAX ? { html, net: /<script\b[^>]*\bsrc\s*=\s*["']?https?:/i.test(html) } : null;   // net: it names a library kept on another server, which the frame does not load unless asked
+  });
+  artMemo.delete(key); artMemo.set(key, found.some(Boolean) ? { found } : { miss: size }); if (artMemo.size > 24) artMemo.delete(artMemo.keys().next().value);
   return found;
 }
-function artifactCall(proj, id, agent, toolId) {   // the file a publish of that very session sent, when the call shows a page for it: a plain page, published without error
-  let fp = '', ok = false;
+const artifactPage = (file, toolId, fp) => artifactFiles(file, [{ fp, until: toolId }])[0];   // the text of the page at fp as it was when the call toolId published it, or null
+// What the call shows for a publish of that very session, published without error: the page it sent. For an artifact made from a type that was sent several pages (the artboards of a design),
+// also each page as its last publish up to this one sent it, and the canvas.json that places them, if one was sent: the whole document, once it is made, since claude.ai cannot be shown here.
+const CANVAS = /(^|[\\/])canvas\.json$/i;
+const ART_LS = new RegExp('[' + String.fromCharCode(0x2028, 0x2029) + ']', 'g');   // the two line ends JSON keeps and a script does not
+function artifactPlan(proj, id, agent, toolId) {
+  const d = new Map(), ok = new Map(); let url = '', typed = false;
   for (const e of timeline(proj, id).events) {
     if (e.agent !== agent) continue;
-    if (e.kind === 'tools') { for (const t of e.tools) if (t.id === toolId && t.d && t.d.kind === 'artifact') fp = t.d.file; }
-    else if (e.kind === 'results') { for (const it of e.items) if (it.id === toolId && it.art && !it.art.typed) ok = true; }
+    if (e.kind === 'tools') { for (const t of e.tools) if (t.d && t.d.kind === 'artifact') d.set(t.id, t.d); }
+    else if (e.kind === 'results') { for (const it of e.items) if (it.art && d.has(it.id)) { ok.set(it.id, it.art.url); if (it.id === toolId) { url = it.art.url; typed = !!it.art.typed; } } }
   }
-  return ok && /\.html?$/i.test(fp) ? fp : null;
+  const me = d.get(toolId), fp = me ? (typed && me.page) || me.file : ''; if (!url || !/\.html?$/i.test(fp)) return null;   // the page sent beside a canvas.json counts for a template only: a plain artifact is its main file
+  const plan = { fp, pages: [], canvas: null }; if (!typed) return plan;
+  const last = new Map(); for (const [tid, u] of ok) { if (u === url) for (const f of d.get(tid).sent || [d.get(tid).file]) if (/\.html?$/i.test(f) || CANVAS.test(f)) last.set(f, tid); if (tid === toolId) break; }   // in the order they were first sent
+  for (const [f, tid] of last) { if (CANVAS.test(f)) plan.canvas = { fp: f, until: tid }; else plan.pages.push({ fp: f, until: tid }); }
+  return plan;
 }
+function artifactBuild(file, toolId, plan, whole) {   // the page to show, or null. pages, label: how many pages the document has so far, and the name the canvas gives this one
+  const one = artifactPage(file, toolId, plan.fp); if (!plan.pages.length) return one;
+  const got = artifactFiles(file, plan.canvas ? [...plan.pages, plan.canvas] : plan.pages), list = plan.pages.map((w, k) => ({ fp: w.fp, page: got[k] })).filter((x) => x.page);
+  let canvas = null; try { canvas = plan.canvas && got[plan.pages.length] ? JSON.parse(got[plan.pages.length].html) : null; } catch {}
+  const boards = canvas && canvas.boards && typeof canvas.boards === 'object' ? canvas.boards : {}, keyOf = (fp) => Object.keys(boards).find((k) => fp === k || fp.endsWith('/' + k)), board = (fp) => (keyOf(fp) ? boards[keyOf(fp)] : null);
+  const name = (fp) => clip((board(fp) || {}).title, 80) || path.basename(fp).replace(/(\.dc)?\.html?$/i, ''), label = name(plan.fp);
+  if (!whole || list.length < 2) return one && { ...one, pages: list.length, label };
+  const order = canvas && Array.isArray(canvas.order) ? canvas.order : [], rank = (x) => { const n = order.indexOf(keyOf(x.fp)); return n < 0 ? 1e6 : n; }; list.sort((a, b) => rank(a) - rank(b));
+  const num = (v, dflt) => (Number.isFinite(+v) && +v > 0 ? Math.min(+v, 20000) : dflt), pos = (v) => (Number.isFinite(+v) ? Math.max(-1e5, Math.min(1e5, +v)) : 0), PREV = /"\$preview"\s*:\s*\{\s*"width"\s*:\s*(\d+)\s*,\s*"height"\s*:\s*(\d+)/;
+  const items = list.map((x) => { const b = board(x.fp), pv = PREV.exec(x.page.html); return { html: x.page.html, title: name(x.fp), x: b ? pos(b.x) : null, y: b ? pos(b.y) : null, w: num(b && b.w, pv ? +pv[1] : 1100), h: num(b && b.h, pv ? +pv[2] : 800) }; });
+  const notes = canvas && canvas.notes && typeof canvas.notes === 'object' ? Object.values(canvas.notes).filter((n) => n && typeof n.text === 'string').slice(0, 40).map((n) => ({ text: clip(n.text, 120), x: pos(n.x), y: pos(n.y), big: /^title/.test(n.kind || '') })) : [];
+  const data = JSON.stringify({ items, notes }).replace(/</g, '\\u003c').replace(ART_LS, (ch) => '\\u' + ch.charCodeAt(0).toString(16));
+  return { html: ARTIFACT_WHOLE.replace('%DATA%', () => data), net: list.some((x) => x.page.net), pages: list.length, label };
+}
+// The whole document: each page in a shadow root of its own (its styles stay its own; its script tags do not run, its inline handlers do, in the same sandbox as the frame of one page). Shared, every page at once in the grid that shows them
+// largest; pinned (fit=w), where the canvas puts them (or three to a row), to the width of the window, to scroll through. No backslash in this script: the template literal would eat it.
+const ARTIFACT_WHOLE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;background:#e8e8ec}#o{position:relative;margin:0 auto;overflow:hidden}#c{position:absolute;left:0;top:0;transform-origin:0 0}.b{position:absolute;overflow:hidden;background:#fff;box-shadow:0 2px 14px rgba(0,0,0,.18);font:initial;color:initial}.t,.n{position:absolute;white-space:nowrap;font:600 22px system-ui,sans-serif;color:#666}.n{font-size:30px;color:#333}.n.big{font-size:44px;font-weight:700}</style><div id="o"><div id="c"></div></div><script type="application/json" id="d">%DATA%</script><script>
+(function () {
+  var D = JSON.parse(document.getElementById('d').textContent), c = document.getElementById('c'), o = document.getElementById('o'), M = 60, wide = /[?&]fit=w(&|$)/.test(location.search);
+  var placed = D.items.filter(function (it) { return it.x != null; }), gy = placed.length ? Math.max.apply(null, placed.map(function (it) { return it.y + it.h; })) + 160 : 0, gx = 0, col = 0, rowH = 0;
+  D.items.forEach(function (it) { if (it.x != null) return; if (col === 3) { col = 0; gx = 0; gy += rowH + 120; rowH = 0; } it.x = gx; it.y = gy; gx += it.w + 80; rowH = Math.max(rowH, it.h); col++; });   // pages the canvas does not place: three to a row, below it
+  var els = D.items.map(function (it) {
+    var b = document.createElement('div'), t = document.createElement('div'); b.className = 'b'; b.attachShadow({ mode: 'open' }).innerHTML = it.html; t.className = 't'; t.textContent = it.title; c.appendChild(t); c.appendChild(b); return { it: it, b: b, t: t };
+  });
+  var notes = D.notes.map(function (n) { var e = document.createElement('div'); e.className = 'n' + (n.big ? ' big' : ''); e.textContent = n.text; c.appendChild(e); return { n: n, e: e }; });
+  var fit = function () {   // pinned (fit=w): where the canvas puts each page, to the width of the window, to scroll through; shared: every page at once, in the grid that shows them largest
+    var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, box = function (x, y, w, h) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); };
+    var put = function (e, x, y) { e.b.style.cssText = 'left:' + x + 'px;top:' + y + 'px;width:' + e.it.w + 'px;height:' + e.it.h + 'px'; e.t.style.cssText = 'left:' + x + 'px;top:' + (y - 38) + 'px'; box(x, y - 44, e.it.w, e.it.h + 44); };
+    if (wide) { els.forEach(function (e) { put(e, e.it.x, e.it.y); }); notes.forEach(function (n) { n.e.style.cssText = 'left:' + n.n.x + 'px;top:' + n.n.y + 'px'; box(n.n.x, n.n.y, 400, 60); }); }
+    else {
+      var n = els.length, cw = Math.max.apply(null, els.map(function (e) { return e.it.w; })) + 60, ch = Math.max.apply(null, els.map(function (e) { return e.it.h; })) + 84, k = 1, best = 0;
+      for (var j = 1; j <= n; j++) { var r = Math.ceil(n / j), s0 = Math.min(innerWidth / (j * cw + 2 * M), innerHeight / (r * ch + 2 * M)); if (s0 > best) { best = s0; k = j; } }
+      els.forEach(function (e, i) { put(e, (i % k) * cw, Math.floor(i / k) * ch + 44); }); notes.forEach(function (n) { n.e.style.cssText = 'display:none'; });
+    }
+    var bw = x1 - x0 + 2 * M, bh = y1 - y0 + 2 * M, s = wide ? innerWidth / bw : Math.min(innerWidth / bw, innerHeight / bh);
+    o.style.width = bw * s + 'px'; o.style.height = bh * s + 'px'; o.style.marginTop = wide ? '0' : Math.max(0, (innerHeight - bh * s) / 2) + 'px'; c.style.transform = 'scale(' + s + ') translate(' + (M - x0) + 'px,' + (M - y0) + 'px)';
+  };
+  fit(); addEventListener('resize', fit);
+})();
+</script>`;
 // What the frame of an artifact may do: run the page's own scripts, and nothing else. "sandbox" without allow-same-origin gives the page an origin of its own, also when its address is opened in a tab:
 // it cannot read this server (which refuses what does not come from its own page), keep anything, open a window or send a form. Without net, nothing is fetched from anywhere. With net (the person
 // asked for the libraries of the pages, ⚙ or the button in the window), scripts and fonts come from the servers claude.ai itself lets an artifact use, and from nowhere else; the page still cannot send anything out.
@@ -1027,11 +1083,11 @@ function start(port = PORT) {
       if (!im) { res.writeHead(bad ? 400 : 404); return res.end(bad ? 'bad request' : 'not found'); }
       res.writeHead(200, { 'content-type': im.type, 'content-length': im.buf.length, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff' }); return res.end(im.buf);
     }
-    if (url.pathname === '/api/artifact') {   // the page a publish of this session sent, for the frame of the shared screen · check=1: is there one, and does it name libraries (asked before the frame is drawn)
+    if (url.pathname === '/api/artifact') {   // the page a publish of this session sent, for the frame of the shared screen · check=1: is there one, and does it name libraries (asked before the frame is drawn) · whole=1: the whole document
       const q = (k) => url.searchParams.get(k) || '', SAFE = /^[\w.\-]+$/, bad = [q('proj'), q('id'), q('agent'), q('tool')].some((v) => !SAFE.test(v) || v === '..' || v.length > 200) || q('tool').length < 6;
       if (bad) { res.writeHead(400); return res.end('bad request'); }
-      const file = sourceOf(q('proj')) ? null : mediaFile(q('proj'), q('id'), q('agent')), fp = file && fs.existsSync(file) && fs.existsSync(mediaFile(q('proj'), q('id'), 'main')) ? artifactCall(q('proj'), q('id'), q('agent'), q('tool')) : null, page = fp && artifactPage(file, q('tool'), fp);
-      if (q('check')) return json(page ? { ok: true, net: page.net } : { ok: false }, page ? 200 : 404);
+      const file = sourceOf(q('proj')) ? null : mediaFile(q('proj'), q('id'), q('agent')), plan = file && fs.existsSync(file) && fs.existsSync(mediaFile(q('proj'), q('id'), 'main')) ? artifactPlan(q('proj'), q('id'), q('agent'), q('tool')) : null, page = plan && artifactBuild(file, q('tool'), plan, q('whole') === '1');
+      if (q('check')) return json(page ? { ok: true, net: page.net, ...(page.pages > 1 ? { pages: page.pages, label: page.label } : {}) } : { ok: false }, page ? 200 : 404);   // pages: a document of several pages, which can be shown whole (whole=1)
       if (!page) { res.writeHead(404); return res.end('not found'); }
       const body = Buffer.from((/^\s*<!doctype/i.test(page.html) ? '' : '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">') + page.html, 'utf8');   // an artifact is published as the inside of a page: claude.ai adds the rest, and so does this
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': body.length, 'content-security-policy': artifactCsp(q('net') === '1'), 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cache-control': 'private, no-store' }); return res.end(body);

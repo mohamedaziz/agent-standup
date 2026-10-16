@@ -1,5 +1,7 @@
 # Agent Standup
 
+![Agent Standup](.claude-plugin/icon.png)
+
 Watch the Claude Code, Codex and Mistral Vibe sessions on your computer as a live team call. Each agent is a small character at its desk: the lead gives orders, sub-agents join, share their screen with the real commands and diffs, and report back. You see at a glance who is working, who waits on whom, and who needs you.
 
 This plugin is a thin way in to the [Agent Standup](https://github.com/Atoll92/agent-standup) app. It adds two skills to Claude Code.
@@ -26,17 +28,26 @@ It needs Node.js 18 or later and works where Claude Code runs on your own comput
 
 Both skills run one command, pinned to an exact version of the app's npm package:
 
-    npx -y @double_geste/agent-standup@1.34.0
+    npx -y @double_geste/agent-standup@1.35.0
 
 `npx` downloads that package from the npm registry the first time. The package has no dependencies. `open` starts a web server that listens on your own machine only (`127.0.0.1`); `status` starts nothing and exits.
 
 ## Data
 
-The app reads the session files Claude Code writes in `~/.claude/projects`, the ones Codex writes in `~/.codex/sessions` and the ones Mistral Vibe writes in `~/.vibe/logs/session`. It never writes to them. By default it sends nothing anywhere: the page is served from your machine to your browser.
+The app reads the session files Claude Code writes in `~/.claude/projects`, the ones Codex writes in `~/.codex/sessions`, the ones Mistral Vibe writes in `~/.vibe/logs/session`, and those of Cowork (a tab of the Claude desktop app) in that app’s own folder. It never writes to them. By default it sends nothing anywhere: the page is served from your machine (`127.0.0.1`) to your browser.
 
-On your machine it keeps your settings in one small file and, when voices are on, the spoken lines as sound files in a private temporary folder, deleted after a day.
+On your machine it keeps your settings in one small file, the list of sessions you put away as done, a log of its own errors, a character pack if you buy one, and, when voices are on, the spoken lines as sound files in a private temporary folder, deleted after a day.
 
-The app translates the call when its interface is in French, Spanish or Brazilian Portuguese (short lines go through your own Claude login). Three other things in its settings call out, all off by default: jokes (the same login), a web radio stream, and a usage counter (one empty request a day). The plugin turns none of them on.
+Only these can leave your computer, each when you turn it on or start it yourself. The plugin turns none of them on.
+
+- **Translation and jokes:** with the interface in French, Spanish or Brazilian Portuguese (translation is on for those languages, and can be switched off for the last two), or with the jokes turned on, short lines of the session go to Anthropic through your own Claude Code login, or your own API key if you set one.
+- **Office radio:** a request for the audio stream, to Radio France.
+- **Natural voices:** installing them downloads a voice package from the npm registry and its model from Hugging Face.
+- **Character packs:** pressing "Buy" asks agent-standup.com for a payment page (the payment happens on Stripe), then for the pack. No session content.
+- **Report a problem:** opens a draft issue on GitHub with the app’s version, your system, browser and language, and its last errors. Nothing is sent unless you submit it on GitHub yourself.
+- **Artifact libraries:** when you ask for them, an artifact shown in the call loads the scripts and fonts it names from the servers claude.ai lets artifacts use. The page runs in a frame that cannot send anything out.
+
+Running the app with `npx` downloads its package from the npm registry. This app has no usage counter (only the VS Code extension has one, opt-in).
 
 ## Privacy
 

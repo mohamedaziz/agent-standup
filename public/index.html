@@ -1304,7 +1304,7 @@ function syncUI() {
 // ---------- tool ticker, shared screen, flying messages ----------
 // ---------- what each agent is doing: tool calls with their real outputs ----------
 S.term = {}; S.todos = {}; S.run = {}; S.act = {}; S.usage = {}; S.errs = {}; S.lastAct = {}; S.waitOn = {}; S.orderTs = {}; S.prevState = {}; S.ctx = {}; S.model = {}; S.cw = {}; S.compacts = {}; S.ctxWarned = {}; S.rep = {}; S.loops = {}; S.present = null; S.camFor = null; let presentTimer = null;
-S.files = new Map(); S.cands = new Map(); S.turnN = 0; S.turnSaid = ''; S.fgone = new Set(); S.fmade = new Map(); S.arts = new Map(); S.artCalls = new Map(); S.artOk = new Map(); S.artPin = null;   // files: path → the Write call that created it, in the order they were written · cands: the documents the commands name (see candFile) · turnN: how many orders you gave so far · turnSaid: what you and the lead said in this turn · fgone: the files found missing on a click · fmade: what the server answered about a document a command names
+S.files = new Map(); S.cands = new Map(); S.turnN = 0; S.turnSaid = ''; S.fgone = new Set(); S.fmade = new Map(); S.arts = new Map(); S.artCalls = new Map(); S.artOk = new Map(); S.artPin = null; S.artWhole = null; S.wholeSeen = new Set();   // files: path → the Write call that created it, in the order they were written · cands: the documents the commands name (see candFile) · turnN: how many orders you gave so far · turnSaid: what you and the lead said in this turn · fgone: the files found missing on a click · fmade: what the server answered about a document a command names
 const later = (k, fn, ms = 160) => { later.p = later.p || {}; if (later.p[k]) return; later.p[k] = setTimeout(() => { later.p[k] = 0; fn(); }, ms); };   // coalesce bursts of repaints
 const fmtTok = (n) => (n < 1000 ? String(n) : n < 1e6 ? (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'k' : (n / 1e6).toFixed(n < 1e7 ? 2 : 1) + 'M');
 const tokTotal = (u) => (u ? u.i + u.o + u.w : 0);   // headline = input + output + cache writes; cache reads are cheap and shown separately
@@ -1540,7 +1540,7 @@ const lineHtml = (l, view) => view === 'editor'
 // ---------- screen sharing: a real video-call presentation (window + presenter camera) ----------
 function renderPresent() {
   const id = S.present, p = S.agents[id]; if (!p) return; if (S.artPin && !S.arts.has(S.artPin)) { S.artPin = null; armPresent(); }
-  const pinned = S.artPin ? S.arts.get(S.artPin) : null, m = pinned ? artModel(pinned, id) : termModel(id), shape = m.view === 'web' && pinned ? 'pin' : m.view === 'web' || m.view === 'image' ? 'pic' : '';
+  const pinned = S.artPin ? S.arts.get(S.artPin) : null, whole = !pinned && S.artWhole ? S.arts.get(S.artWhole) : null, m = pinned ? artModel(pinned, id) : whole ? artModel(whole, id) : termModel(id), shape = m.view === 'web' && pinned ? 'pin' : m.view === 'web' || m.view === 'image' ? 'pic' : '';
   $('#present .pwin').className = 'pwin ' + (m.view === 'term' ? 'term' : m.view); $('#present').classList.toggle('pic', shape === 'pic'); $('#present').classList.toggle('pin', shape === 'pin'); if (shape !== S.picUp) { S.picUp = shape; layout(); }   // a picture or a page gets a taller window, a pinned page the tallest
   $('#ptitle').textContent = m.view === 'term' ? `${p.name} — zsh — 96×24` : m.title;
   const pb = $('#pbody'), shown = m.view === 'image' ? m.imgs.join(' ') : m.view === 'web' ? m.key : ''; pb.dataset.art = m.view === 'web' ? m.a.url : '';
@@ -1562,40 +1562,46 @@ function armPresent() {   // stays up while a command is still running, then ~4 
   clearTimeout(presentTimer); if (S.hold || S.artPin) return;
   presentTimer = setTimeout(() => { if (S.present && S.run[S.present] && S.playing) armPresent(); else hidePresent(); }, ($('#present .pwin').classList.contains('web') ? 20000 : $('#present').classList.contains('pic') ? 9000 : 4200) / Math.max(1, spd() / 1.2));
 }
-function showPresent(id) {
-  if (S.artPin || S.boost > 1 || (S.speakers.size && !S.speakers.has(id))) return;   // a page you pinned stays up · catching up, or someone else has the floor
+function showPresent(id, keep) {   // keep: the whole document that is being shown (see shareWhole); anything else the agent does takes its place
+  if (!keep) S.artWhole = null; if (S.artPin || S.boost > 1 || (S.speakers.size && !S.speakers.has(id))) return;   // a page you pinned stays up · catching up, or someone else has the floor
   const first = S.present !== id; S.present = id; $('#present').classList.add('on'); document.body.classList.add('presenting'); document.querySelectorAll('.tile.presenter').forEach((t) => t.classList.remove('presenter')); const pt = $('#t-' + id); if (pt) pt.classList.add('presenter'); renderPresent(); if (first) { layout(); AUD.tone(880, .12, 'sine', .05); }
   armPresent();
 }
 function hidePresent() {
-  clearTimeout(presentTimer); if (!S.present || S.artPin) return; if ($('#pbody').dataset.art) { $('#pbody').innerHTML = ''; $('#pbody').dataset.img = $('#pbody').dataset.art = ''; }   /* the page of an artifact does not go on running behind a closed window */
+  clearTimeout(presentTimer); if (!S.present || S.artPin) return; S.artWhole = null; if ($('#pbody').dataset.art) { $('#pbody').innerHTML = ''; $('#pbody').dataset.img = $('#pbody').dataset.art = ''; }   /* the page of an artifact does not go on running behind a closed window */
   S.present = null; $('#present').classList.remove('on'); document.body.classList.remove('presenting'); document.querySelectorAll('.tile.presenter').forEach((t) => t.classList.remove('presenter')); $('#pcap').textContent = ''; layout();
 }
 // ---------- artifacts: the pages the session published on claude.ai, shown the way a call shows a browser window someone shares ----------
 // When a publish succeeds its author shares the page for a moment; afterwards it is in the line of files, and a click there pins it: the window takes the room, stays until you close it (✕, Esc),
 // follows the next versions and steps through the other artifacts of the session (‹ ›). The page itself comes from the server, which puts it together from the session file (claude.ai lets nobody frame it):
-// a frame that can reach neither the app nor, unless you ask for the libraries, the network. Where there is no page to show (made from a claude.ai template, or written another way) the window says so and gives the link.
+// a frame that can reach neither the app nor, unless you ask for the libraries, the network. Where there is no page to show (a claude.ai template that was sent no page, or one written another way) the window says so and gives the link.
 const artSrc = (a) => `/api/artifact?proj=${encodeURIComponent(S.cur.proj)}&id=${encodeURIComponent(S.cur.id)}&agent=${encodeURIComponent(a.agent)}&tool=${encodeURIComponent(a.id)}`;
 function noteArts(ev) {   // one entry per artifact, the last publish of it: published again, it is the newest and shows its new version
-  if (ev.kind === 'tools') { for (const t of ev.tools) if (t.d && t.d.kind === 'artifact') S.artCalls.set(t.id, { agent: ev.agent, title: t.d.title || '', note: t.d.note || '' }); return; }
+  if (ev.kind === 'tools') { for (const t of ev.tools) if (t.d && t.d.kind === 'artifact') S.artCalls.set(t.id, { agent: ev.agent, title: t.d.title || '', note: t.d.note || '', pub: !t.d.open && !t.d.doc }); return; }
   if (ev.kind !== 'results') return;
   for (const it of ev.items) { const c = it.art && S.artCalls.get(it.id); if (!c) continue; const u = it.art.url, was = S.arts.get(u) || {}; S.arts.delete(u); S.arts.set(u, { url: u, title: it.art.title || c.title || was.title || 'Artifact', note: c.note || was.note || '', agent: c.agent, id: it.id, v: it.art.v || 0, typed: !!it.art.typed, turn: S.turnN }); if (S.artPin === u) later('art', renderPresent); }
 }
+// A document of several pages made from a claude.ai type (the artboards of a design): each page is shared as it is published, and the whole document once, while the lead says it is done,
+// since the page on claude.ai cannot be shown here. Pinned from the line of files, it is the whole document too.
+function shareWhole() {
+  const a = [...S.arts.values()].reverse().find((x) => x.typed && x.turn === S.turnN && (S.artOk.get(x.id) || {}).pages > 1 && !S.wholeSeen.has(x.url + '|' + x.id)), st = a && S.artOk.get(a.id); if (!st || !st.ok || !(st.pages > 1)) return;
+  S.wholeSeen.add(a.url + '|' + a.id); S.artWhole = a.url; showPresent(S.agents[a.agent] ? a.agent : 'main', true); if (S.present !== (S.agents[a.agent] ? a.agent : 'main')) S.artWhole = null;
+}
 function askArt(a) {   // is there a page to show for that publish? Asked once: null while the answer is on its way
-  if (S.artOk.has(a.id)) return S.artOk.get(a.id); if (a.typed || S.demo || !S.cur) { S.artOk.set(a.id, { ok: false }); return S.artOk.get(a.id); }
+  if (S.artOk.has(a.id)) return S.artOk.get(a.id); if (S.demo || !S.cur) { S.artOk.set(a.id, { ok: false }); return S.artOk.get(a.id); }
   const cur = S.cur; S.artOk.set(a.id, null);
-  fetch(artSrc(a) + '&check=1').then((r) => r.json()).then((j) => { if (S.cur !== cur) return; S.artOk.set(a.id, { ok: !!j.ok, net: !!j.net }); if (S.present) renderPresent(); }).catch(() => { if (S.cur === cur) S.artOk.delete(a.id); });
+  fetch(artSrc(a) + '&check=1').then((r) => r.json()).then((j) => { if (S.cur !== cur) return; S.artOk.set(a.id, { ok: !!j.ok, net: !!j.net, pages: +j.pages || 0, label: j.label || '' }); if (S.present) renderPresent(); }).catch(() => { if (S.cur === cur) S.artOk.delete(a.id); });
   return null;
 }
 function artModel(a, id) {
-  const st = askArt(a), all = [...S.arts.keys()], pinned = S.artPin === a.url, buf = S.term[id] || [];
-  return { view: 'web', title: a.title, lines: [], a, st, pinned, n: all.length, i: all.indexOf(a.url), stat: a.note || statOf(buf[buf.length - 1], id), key: [a.url, a.id, st ? (st.ok ? 'ok' : 'no') : '?', st && st.net ? 'n' : '', prefs.artNet ? 'N' : '', pinned ? 'p' + all.indexOf(a.url) + '/' + all.length : '', prefs.lang].join('|') };
+  const st = askArt(a), all = [...S.arts.keys()], pinned = S.artPin === a.url, buf = S.term[id] || [], whole = !!(st && st.ok && st.pages > 1 && (pinned || S.artWhole === a.url));
+  return { view: 'web', title: a.title, lines: [], a, st, pinned, whole, n: all.length, i: all.indexOf(a.url), stat: a.note || statOf(buf[buf.length - 1], id), key: [a.url, a.id, st ? (st.ok ? 'ok' : 'no') : '?', st && st.net ? 'n' : '', prefs.artNet ? 'N' : '', pinned ? 'p' + all.indexOf(a.url) + '/' + all.length : '', whole ? 'w' : '', prefs.lang].join('|') };
 }
 function artHtml(m) {
   const a = m.a, ok = m.st && m.st.ok, libs = ok && m.st.net && !prefs.artNet, open = esc(L('Ouvrir sur claude.ai', 'Open on claude.ai'));
   const nav = m.pinned && m.n > 1 ? `<button class="pnb" data-go="-1">‹</button><span class="pnn">${m.i + 1}/${m.n}</span><button class="pnb" data-go="1">›</button>` : '';
-  const bar = `<div class="pnav">${nav}<span class="purl">🔒 ${esc(a.url.replace(/^https:\/\//, ''))}</span>${a.v > 1 ? `<span class="pnn">v${a.v}</span>` : ''}${libs ? `<button class="pnb lib" data-lib title="${esc(L('Cette page utilise des bibliothèques hébergées ailleurs : elles ne sont chargées que si vous le demandez', 'This page uses libraries kept on other servers: they are loaded only if you ask'))}">${esc(L('Charger ses bibliothèques', 'Load its libraries'))}</button>` : ''}<button class="pnb" data-open title="${open}" aria-label="${open}">↗</button>${m.pinned ? `<button class="pnb" data-x title="${esc(L('Fermer', 'Close'))}" aria-label="${esc(L('Fermer', 'Close'))}">✕</button>` : ''}</div>`;
-  const page = ok ? `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(a.title)}" src="${esc(artSrc(a) + (prefs.artNet ? '&net=1' : ''))}"></iframe>` + (m.pinned ? '' : `<button class="pzoom" data-pin title="${esc(L('Cliquer pour agrandir', 'Click to enlarge'))}" aria-label="${esc(L('Cliquer pour agrandir', 'Click to enlarge'))}"></button>`)
+  const bar = `<div class="pnav">${nav}<span class="purl">🔒 ${esc(a.url.replace(/^https:\/\//, ''))}</span>${ok && m.st.pages > 1 ? `<span class="pnn">${esc(m.whole ? L(`${m.st.pages} pages`, `${m.st.pages} pages`) : m.st.label)}</span>` : ''}${a.v > 1 ? `<span class="pnn">v${a.v}</span>` : ''}${libs ? `<button class="pnb lib" data-lib title="${esc(L('Cette page utilise des bibliothèques hébergées ailleurs : elles ne sont chargées que si vous le demandez', 'This page uses libraries kept on other servers: they are loaded only if you ask'))}">${esc(L('Charger ses bibliothèques', 'Load its libraries'))}</button>` : ''}<button class="pnb" data-open title="${open}" aria-label="${open}">↗</button>${m.pinned ? `<button class="pnb" data-x title="${esc(L('Fermer', 'Close'))}" aria-label="${esc(L('Fermer', 'Close'))}">✕</button>` : ''}</div>`;
+  const page = ok ? `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(a.title)}" src="${esc(artSrc(a) + (prefs.artNet ? '&net=1' : '') + (m.whole ? '&whole=1' + (m.pinned ? '&fit=w' : '') : ''))}"></iframe>` + (m.pinned ? '' : `<button class="pzoom" data-pin title="${esc(L('Cliquer pour agrandir', 'Click to enlarge'))}" aria-label="${esc(L('Cliquer pour agrandir', 'Click to enlarge'))}"></button>`)
     : `<div class="pcard"><i>🌐</i><b>${esc(a.title)}</b>${a.note ? `<p>${esc(a.note)}</p>` : ''}${m.st ? `<em>${esc(L('Pas d’aperçu ici : la page est sur claude.ai', 'No preview here: the page is on claude.ai'))}</em><button class="pnb" data-open>${open} ↗</button>` : '<span class="spin"></span>'}</div>`;
   return bar + `<div class="pweb">${page}</div>`;
 }
@@ -2286,8 +2292,9 @@ async function run(i) {
     if (ev.kind === 'usage' || ev.kind === 'compact') { if (ev.kind === 'compact' && S.live && prefs.banter) toast(`${nameOf(ev.agent)}: ${L('contexte compacté 🗜', 'context compacted 🗜')}`); i++; continue; }
     if (ev.kind === 'finish') { applyStatus(ev); paintStatus(); i++; continue; }
     const backlog = S.live ? S.events.length - i : 0, quick = S.live ? Math.min(1, 40 / Math.max(1, backlog)) : 1;   // live: hundreds of tool events from parallel sub-agents must not take minutes to scroll past
-    if (ev.kind === 'results') { applyResults(ev, S.boost > 1); await sleep((S.boost === 1 && S.present === ev.agent && ev.items.some((it) => it.img) ? (S.live ? 900 : 1800) : S.demo ? 900 : S.live ? 30 * quick : 80) / spd()); i++; continue; }   // a picture gets a moment on screen
+    if (ev.kind === 'results') { applyResults(ev, S.boost > 1); await sleep((S.boost === 1 && S.present === ev.agent && ev.items.some((it) => it.img) ? (S.live ? 900 : 1800) : S.boost === 1 && S.present === ev.agent && ev.items.some((it) => it.art && (S.artCalls.get(it.id) || {}).pub) ? (S.live ? 2500 : 4000) : S.demo ? 900 : S.live ? 30 * quick : 80) / spd()); i++; continue; }   // a picture gets a moment on screen
     if (ev.kind === 'tools') { applyStatus(ev); tickTools(ev); AUD.click(); OFFICE.kick(ev.tools[ev.tools.length - 1].name); paintStatus(); if (S.live && S.owed && ev.agent === 'main') { await leadAck(ev, token); if (token !== S.token) return; } if (quick === 1) await smallTalk(token); await sleep((S.demo ? 1100 : S.live ? 110 * quick : 250) / spd()); i++; continue; }
+    if (ev.kind === 'say' && ev.end && ev.agent === 'main' && S.boost <= 1) shareWhole();   // the lead says it is done: the whole document it made, if it has several pages
     const group = [ev]; let j = i + 1;   // sub-agents talking back-to-back were running in parallel: their lines are taken together and said one after the other
     if (ev.kind === 'order') {   // several orders in a row (a parallel launch): the new agents all appear now, the first order is read, the others are named in one line
       while (j < Math.min(S.events.length, i + 40) && group.length < 8) { const e2 = S.events[j]; if (e2.kind === 'usage' || e2.kind === 'compact') { tally(e2); j++; continue; } if (e2.kind === 'order' && e2.agent === ev.agent) { group.push(e2); j++; } else break; }
@@ -2362,7 +2369,7 @@ async function loadSession(proj, id) {
   const data = await (await fetch(`/api/session?proj=${encodeURIComponent(proj)}&id=${id}`)).json();
   if (mine !== S.loadN || data.error) return false;
   S.term = {}; S.camFor = null; S.focus = null; S.agents = {}; for (const k in nameBook) delete nameBook[k]; [{ id: 'user' }, ...data.agents].forEach((a) => (S.agents[a.id] = persona(a)));
-  clearThoughts(); Object.assign(TH, { since: {}, next: {}, said: {}, last: 0 }); S.events = data.events; stampT(0); S.byK = new Map(data.events.map((e) => [e.k, e])); S.seq = data.seq || 0; S.ep = data.ep || ''; S.sawEnd = !!data.marks || data.events.some((e) => e.end); S.late = []; S.pos = 0; S.joinAt = Date.now(); S.idx = 0; S.status = {}; S.tc = {}; S.cur = { proj, id }; S.logTo = 0; S.detail = null; $('#detail').classList.remove('on'); S.fgone = new Set(); S.fmade = new Map(); S.artOk = new Map(); S.artPin = null;
+  clearThoughts(); Object.assign(TH, { since: {}, next: {}, said: {}, last: 0 }); S.events = data.events; stampT(0); S.byK = new Map(data.events.map((e) => [e.k, e])); S.seq = data.seq || 0; S.ep = data.ep || ''; S.sawEnd = !!data.marks || data.events.some((e) => e.end); S.late = []; S.pos = 0; S.joinAt = Date.now(); S.idx = 0; S.status = {}; S.tc = {}; S.cur = { proj, id }; S.logTo = 0; S.detail = null; $('#detail').classList.remove('on'); S.fgone = new Set(); S.fmade = new Map(); S.artOk = new Map(); S.artPin = null; S.artWhole = null; S.wholeSeen = new Set();
   const opt = $('#sessions').selectedOptions[0]; S.title = (S.live ? niceProj(proj) : opt && opt.dataset.title) || '';
   if (proj === '_demo') S.events.forEach((e) => { if (e.fr) trMem.set(baseText(e), e.fr, 'fr'); });   // the demo ships its own French
   $('#subtitle').textContent = S.title; recomputeStatus(0); buildStage(); renderHighlights(); setFocus('main'); renderLog(true); computeGantt(); layout(); paintStatus(); prefetchTr(0); return true;
