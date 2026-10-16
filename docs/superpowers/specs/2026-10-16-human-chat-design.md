@@ -26,9 +26,11 @@ terminal is open) and the per-session `messagingSocketPath` (internal, undocumen
 ### Session to pane mapping
 
 Claude Code (checked on 2.1.301) writes `~/.claude/sessions/<pid>.json` for each running session,
-with `pid`, `sessionId`, `cwd`, `status` (`busy` / idle), `kind`.
+with `pid`, `procStart`, `sessionId`, `cwd`, `status` (`busy` / idle), `kind`.
 
 1. Find the file whose `sessionId` is the session followed by the call. None: not running.
+   `procStart` must equal field 22 (start time) of `/proc/<pid>/stat`: otherwise the pid was reused by
+   another process and the session counts as not running (`none`).
 2. `tmux list-panes -a -F '#{pane_id} #{pane_pid}'`.
 3. Walk up the parents of the claude `pid` (`/proc/<pid>/stat`, field 4) until one is a `pane_pid`.
    Exact even when several sessions run in the same folder. No match: running outside tmux.
@@ -49,7 +51,8 @@ The lookup runs on each `GET /api/reply` (cheap: one small directory, one tmux c
 - Guards: both paths join the existing `Sec-Fetch-Site` list. On top of the existing Host / Origin
   check, `POST` needs a random token made at start (`crypto.randomBytes(24)`), served in
   `/api/prefs.js` as `window.REPLY_TOKEN`, compared with `crypto.timingSafeEqual`.
-- Off unless `AGENT_STANDUP_REPLY=on`: the upstream default stays read-only.
+- A text ending in `;` gets a trailing space before `send-keys`: tmux would read the final `;` as the end of the command and drop it.
+- Off unless `AGENT_STANDUP_REPLY` is `on`, `1`, `yes` or `true`: the upstream default stays read-only.
 
 ## Page (`public/index.html`)
 
@@ -72,8 +75,12 @@ Touch target 44 px minimum. Existing tokens only (`--panel2`, `--line`, `--accen
 Accessibility: one `role="status" aria-atomic="true"` element announces "Sent to <name>" or the error.
 Focus stays in the field. The feature is not shown at all when the server has it off.
 
-After a send: field cleared, the "You" tile talks for a moment (existing animation). The real line
-comes from the transcript, which stays the only source of what was said.
+After a send: field cleared (only if it still holds what was sent). The real line comes from the
+transcript, which stays the only source of what was said; it makes the "You" tile talk.
+
+Recipient guard: the page remembers which session a draft was started for. If the call has moved to
+another session when Enter is pressed, nothing is sent: the text stays and the status line (error
+style) says "Recipient changed: <name>. Press Enter again to send it there.". The next Enter sends.
 
 The page asks `GET /api/reply` when the followed session changes and every 5 s while live.
 
